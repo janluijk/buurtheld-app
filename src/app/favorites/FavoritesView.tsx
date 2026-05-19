@@ -618,30 +618,37 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
                     </div>
                     <div className="mt-0.5 text-xs text-neutral-500">{formatKm(s.distanceM)}</div>
                     {wasRefreshed ? (
-                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                        <div className="text-neutral-500">Leader (90d)</div>
-                        <div className="text-right font-medium">
-                          {hasLeader ? s.leaderCountOverall : '—'}
+                      isYouTheLegend ? (
+                        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                          <div className="text-neutral-500">Your efforts (90d)</div>
+                          <div className="text-right font-medium">{athleteCount}</div>
                         </div>
-                        <div className="text-neutral-500">You (90d)</div>
-                        <div className="text-right font-medium">{athleteCount}</div>
-                        {hasLeader ? (
-                          <>
-                            <div className="text-neutral-500">Attempts to claim</div>
-                            <div className="text-right font-semibold text-[#FC5200]">
-                              {remainingAttempts}
-                            </div>
-                            <div className="text-neutral-500">Distance to claim</div>
-                            <div className="text-right font-semibold text-[#FC5200]">
-                              {formatKm(remainingDistanceM ?? 0)}
-                            </div>
-                          </>
-                        ) : (
-                          <div className="col-span-2 mt-1 text-xs italic text-neutral-400">
-                            Local Legend not active for this segment.
+                      ) : (
+                        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                          <div className="text-neutral-500">Leader (90d)</div>
+                          <div className="text-right font-medium">
+                            {hasLeader ? s.leaderCountOverall : '—'}
                           </div>
-                        )}
-                      </div>
+                          <div className="text-neutral-500">You (90d)</div>
+                          <div className="text-right font-medium">{athleteCount}</div>
+                          {hasLeader ? (
+                            <>
+                              <div className="text-neutral-500">Attempts to claim</div>
+                              <div className="text-right font-semibold text-[#FC5200]">
+                                {remainingAttempts}
+                              </div>
+                              <div className="text-neutral-500">Distance to claim</div>
+                              <div className="text-right font-semibold text-[#FC5200]">
+                                {formatKm(remainingDistanceM ?? 0)}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="col-span-2 mt-1 text-xs italic text-neutral-400">
+                              Local Legend not active for this segment.
+                            </div>
+                          )}
+                        </div>
+                      )
                     ) : (
                       <div className="mt-2 text-xs italic text-neutral-400">
                         No stats yet — press Refresh.
