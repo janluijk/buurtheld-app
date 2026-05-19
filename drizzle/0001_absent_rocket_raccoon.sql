@@ -1,0 +1,1 @@
+ALTER TABLE "segments" ADD COLUMN "local_legend_athlete_id" bigint;

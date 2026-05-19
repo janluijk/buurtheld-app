@@ -9,12 +9,11 @@ import { decodePolyline } from '@/lib/strava/polyline';
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 const DEFAULT_CENTER: [number, number] = [4.9041, 52.3676];
 const DEFAULT_ZOOM = 13;
-const REFETCH_DEBOUNCE_MS = 500;
 const MAX_VIEWPORT_KM = 20;
 const SEGMENTS_SOURCE_ID = 'segments';
 const SEGMENTS_LAYER_ID = 'segments-line';
 
-export function ExploreMap() {
+export function ExploreMap({ initialFavoriteIds }: { initialFavoriteIds: number[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const fetchSeqRef = useRef(0);
@@ -22,6 +21,7 @@ export function ExploreMap() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<number | null>(null);
+  const [favoriteIds, setFavoriteIds] = useState<Set<number>>(() => new Set(initialFavoriteIds));
 
   useEffect(() => {
     const container = containerRef.current;
@@ -57,15 +57,7 @@ export function ExploreMap() {
           'line-opacity': 0.85,
         },
       });
-      void refetch();
-    });
-
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    map.on('moveend', () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        void refetch();
-      }, REFETCH_DEBOUNCE_MS);
+      void refetchFromCache();
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -74,7 +66,6 @@ export function ExploreMap() {
     resizeObserver.observe(container);
 
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
@@ -82,40 +73,66 @@ export function ExploreMap() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function refetch() {
+  function currentBoundsString(): string | null {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map) return null;
+    const b = map.getBounds();
+    return `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+  }
+
+  function viewportIsTooWide(): boolean {
+    const map = mapRef.current;
+    if (!map) return false;
     const b = map.getBounds();
     const latKm = (b.getNorth() - b.getSouth()) * 111;
     const avgLat = ((b.getNorth() + b.getSouth()) / 2) * (Math.PI / 180);
     const lngKm = (b.getEast() - b.getWest()) * 111 * Math.cos(avgLat);
-    const isTooWide = latKm > MAX_VIEWPORT_KM || lngKm > MAX_VIEWPORT_KM;
-    if (isTooWide) {
-      fetchSeqRef.current++;
-      setIsLoading(false);
-      setSegments([]);
-      drawSegments([]);
-      setError('Zoom in to load segments (max 20 km across).');
-      return;
-    }
-    const bounds = `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+    return latKm > MAX_VIEWPORT_KM || lngKm > MAX_VIEWPORT_KM;
+  }
+
+  async function refetchFromCache() {
+    const bounds = currentBoundsString();
+    if (!bounds) return;
     const seq = ++fetchSeqRef.current;
-    setIsLoading(true);
     setError(null);
-    const res = await fetch(`/api/segments/explore?bounds=${bounds}`, { cache: 'no-store' }).catch(
-      () => null
-    );
+    const res = await fetch(`/api/segments/in-bounds?bounds=${bounds}`, {
+      cache: 'no-store',
+    }).catch(() => null);
     const isStale = seq !== fetchSeqRef.current;
     if (isStale) return;
-    setIsLoading(false);
     const isOk = !!res && res.ok;
     if (!isOk) {
-      setError('Failed to load segments');
+      setError('Failed to load cached segments');
       return;
     }
     const data = (await res!.json()) as { segments: ExploreSegment[] };
     setSegments(data.segments);
     drawSegments(data.segments);
+  }
+
+  async function discoverHere() {
+    const bounds = currentBoundsString();
+    if (!bounds) return;
+    if (viewportIsTooWide()) {
+      setError('Zoom in to discover segments (max 20 km across).');
+      return;
+    }
+    const seq = ++fetchSeqRef.current;
+    setIsLoading(true);
+    setError(null);
+    const res = await fetch(`/api/segments/explore?bounds=${bounds}`, {
+      cache: 'no-store',
+    }).catch(() => null);
+    const isStale = seq !== fetchSeqRef.current;
+    if (isStale) return;
+    setIsLoading(false);
+    const isOk = !!res && res.ok;
+    if (!isOk) {
+      const text = await res?.text().catch(() => '');
+      setError(`Discover failed${text ? `: ${text}` : ''}`);
+      return;
+    }
+    await refetchFromCache();
   }
 
   function drawSegments(items: ExploreSegment[]) {
@@ -137,6 +154,24 @@ export function ExploreMap() {
     });
   }
 
+  async function toggleFavorite(segmentId: number) {
+    const wasFavorite = favoriteIds.has(segmentId);
+    const next = new Set(favoriteIds);
+    if (wasFavorite) {
+      next.delete(segmentId);
+    } else {
+      next.add(segmentId);
+    }
+    setFavoriteIds(next);
+    const method = wasFavorite ? 'DELETE' : 'POST';
+    const res = await fetch(`/api/favorites/${segmentId}`, { method }).catch(() => null);
+    const isOk = !!res && res.ok;
+    if (!isOk) {
+      setFavoriteIds(favoriteIds);
+      setError('Failed to update favorite');
+    }
+  }
+
   function focusSegment(s: ExploreSegment) {
     const map = mapRef.current;
     if (!map) return;
@@ -153,7 +188,9 @@ export function ExploreMap() {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !map.isStyleLoaded()) return;
+    if (!map) return;
+    const hasSource = !!map.getSource(SEGMENTS_SOURCE_ID);
+    if (!hasSource) return;
     for (const s of segments) {
       map.setFeatureState(
         { source: SEGMENTS_SOURCE_ID, id: s.id },
@@ -166,13 +203,16 @@ export function ExploreMap() {
     <div className="flex flex-col md:flex-row" style={{ height: '100vh' }}>
       <div className="relative md:flex-1" style={{ minHeight: '60vh' }}>
         <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
-        {isLoading && (
-          <div className="absolute left-3 top-3 rounded-md bg-white/90 px-3 py-1 text-xs shadow">
-            Loading segments…
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={() => void discoverHere()}
+          disabled={isLoading}
+          className="absolute left-3 top-3 rounded-md bg-[#FC5200] px-3 py-2 text-sm font-semibold text-white shadow disabled:opacity-60"
+        >
+          {isLoading ? 'Discovering…' : 'Discover here'}
+        </button>
         {error && (
-          <div className="absolute left-3 top-3 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-xs text-red-700 shadow">
+          <div className="absolute left-3 top-16 max-w-xs rounded-md border border-red-200 bg-red-50 px-3 py-1 text-xs text-red-700 shadow">
             {error}
           </div>
         )}
@@ -182,20 +222,37 @@ export function ExploreMap() {
           {segments.length} segment{segments.length === 1 ? '' : 's'} in view
         </div>
         <ul>
-          {segments.map((s) => (
-            <li
-              key={s.id}
-              onMouseEnter={() => setHoverId(s.id)}
-              onMouseLeave={() => setHoverId(null)}
-              onClick={() => focusSegment(s)}
-              className="cursor-pointer border-b border-neutral-100 px-4 py-3 hover:bg-neutral-50"
-            >
-              <div className="font-medium">{s.name}</div>
-              <div className="mt-0.5 text-xs text-neutral-500">
-                {(s.distanceM / 1000).toFixed(2)} km · {s.avgGrade.toFixed(1)}% avg
-              </div>
-            </li>
-          ))}
+          {segments.map((s) => {
+            const isFavorite = favoriteIds.has(s.id);
+            return (
+              <li
+                key={s.id}
+                onMouseEnter={() => setHoverId(s.id)}
+                onMouseLeave={() => setHoverId(null)}
+                className="flex items-center gap-3 border-b border-neutral-100 px-4 py-3 hover:bg-neutral-50"
+              >
+                <button
+                  type="button"
+                  aria-label={isFavorite ? 'Unstar segment' : 'Star segment'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void toggleFavorite(s.id);
+                  }}
+                  className={`text-2xl leading-none transition ${
+                    isFavorite ? 'text-[#FC5200]' : 'text-neutral-300 hover:text-neutral-500'
+                  }`}
+                >
+                  {isFavorite ? '★' : '☆'}
+                </button>
+                <div className="min-w-0 flex-1 cursor-pointer" onClick={() => focusSegment(s)}>
+                  <div className="truncate font-medium">{s.name}</div>
+                  <div className="mt-0.5 text-xs text-neutral-500">
+                    {(s.distanceM / 1000).toFixed(2)} km · {s.avgGrade.toFixed(1)}% avg
+                  </div>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       </aside>
     </div>

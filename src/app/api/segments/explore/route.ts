@@ -47,7 +47,10 @@ export async function GET(req: NextRequest) {
   const isOk = res.ok;
   if (!isOk) {
     const text = await res.text();
-    return NextResponse.json({ error: 'strava_error', status: res.status, body: text }, { status: 502 });
+    return NextResponse.json(
+      { error: 'strava_error', status: res.status, body: text },
+      { status: 502 }
+    );
   }
 
   const payload = (await res.json()) as { segments: StravaExploreSegment[] };

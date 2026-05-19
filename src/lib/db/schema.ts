@@ -38,6 +38,7 @@ export const segments = pgTable('segments', {
   localLegendEnabled: boolean('local_legend_enabled').notNull().default(false),
   leaderEffortCountOverall: integer('leader_effort_count_overall'),
   leaderEffortCountFemale: integer('leader_effort_count_female'),
+  localLegendAthleteId: bigint('local_legend_athlete_id', { mode: 'number' }),
   detailsFetchedAt: timestamp('details_fetched_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

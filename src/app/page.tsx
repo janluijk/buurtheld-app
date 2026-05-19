@@ -49,12 +49,20 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
               </div>
             </div>
             <div className="flex flex-col items-center gap-3">
-              <a
-                href="/explore"
-                className="inline-flex items-center gap-2 rounded-md bg-[#FC5200] px-5 py-3 font-semibold text-white shadow-sm transition hover:bg-[#e34a00]"
-              >
-                Explore segments
-              </a>
+              <div className="flex gap-3">
+                <a
+                  href="/explore"
+                  className="inline-flex items-center gap-2 rounded-md bg-[#FC5200] px-5 py-3 font-semibold text-white shadow-sm transition hover:bg-[#e34a00]"
+                >
+                  Explore
+                </a>
+                <a
+                  href="/favorites"
+                  className="inline-flex items-center gap-2 rounded-md border border-[#FC5200] px-5 py-3 font-semibold text-[#FC5200] transition hover:bg-[#FC5200]/10"
+                >
+                  Favorites
+                </a>
+              </div>
               <form action="/api/auth/logout" method="post">
                 <button
                   type="submit"
