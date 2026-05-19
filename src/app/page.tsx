@@ -48,14 +48,22 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
                 <div className="text-xs text-neutral-500">Athlete #{user.stravaAthleteId}</div>
               </div>
             </div>
-            <form action="/api/auth/logout" method="post">
-              <button
-                type="submit"
-                className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-100"
+            <div className="flex flex-col items-center gap-3">
+              <a
+                href="/explore"
+                className="inline-flex items-center gap-2 rounded-md bg-[#FC5200] px-5 py-3 font-semibold text-white shadow-sm transition hover:bg-[#e34a00]"
               >
-                Sign out
-              </button>
-            </form>
+                Explore segments
+              </a>
+              <form action="/api/auth/logout" method="post">
+                <button
+                  type="submit"
+                  className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-100"
+                >
+                  Sign out
+                </button>
+              </form>
+            </div>
           </div>
         ) : (
           <a
