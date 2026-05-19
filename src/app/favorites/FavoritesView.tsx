@@ -4,12 +4,38 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl, { Map as MlMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { decodePolyline } from '@/lib/strava/polyline';
+import { AppNav } from '@/components/AppNav';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 const SEGMENTS_SOURCE_ID = 'fav-segments';
 const SEGMENTS_LAYER_ID = 'fav-segments-line';
+const SEGMENTS_HALO_LAYER_ID = 'fav-segments-halo';
 const PINS_SOURCE_ID = 'fav-pins';
 const PINS_LAYER_ID = 'fav-pins-circle';
+
+const COLOR_HELD = '#F2C94C';
+const COLOR_CHASE = '#FC5200';
+const COLOR_NONE = '#9CA3AF';
+
+function segmentState(s: { isYouTheLegend: boolean; leaderCountOverall: number | null }): 'held' | 'chase' | 'none' {
+  if (s.isYouTheLegend) return 'held';
+  if (s.leaderCountOverall !== null) return 'chase';
+  return 'none';
+}
+
+function fitToSegment(map: MlMap, s: { polyline: string }) {
+  const coords = decodePolyline(s.polyline);
+  if (coords.length === 0) return;
+  const lats = coords.map((c) => c[0]);
+  const lngs = coords.map((c) => c[1]);
+  map.fitBounds(
+    [
+      [Math.min(...lngs), Math.min(...lats)],
+      [Math.max(...lngs), Math.max(...lats)],
+    ],
+    { padding: 80, maxZoom: 16, duration: 600 }
+  );
+}
 
 export type FavoriteSegment = {
   id: number;
@@ -35,11 +61,14 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [items, setItems] = useState<FavoriteSegment[]>(initialItems);
+  const itemsRef = useRef<FavoriteSegment[]>(initialItems);
+  itemsRef.current = items;
   const [stillFavorite, setStillFavorite] = useState<Set<number>>(
     () => new Set(initialItems.map((i) => i.id))
   );
   const [refreshingIds, setRefreshingIds] = useState<Set<number>>(() => new Set());
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -70,7 +99,7 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
           features: items.map((s) => ({
             type: 'Feature',
             id: s.id,
-            properties: { id: s.id },
+            properties: { id: s.id, state: segmentState(s) },
             geometry: {
               type: 'LineString',
               coordinates: decodePolyline(s.polyline).map(([lat, lng]) => [lng, lat]),
@@ -78,12 +107,58 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
           })),
         },
       });
+      const colorByState: maplibregl.ExpressionSpecification = [
+        'match',
+        ['get', 'state'],
+        'held',
+        COLOR_HELD,
+        'chase',
+        COLOR_CHASE,
+        COLOR_NONE,
+      ];
+      map.addLayer({
+        id: SEGMENTS_HALO_LAYER_ID,
+        source: SEGMENTS_SOURCE_ID,
+        type: 'line',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#1f2937',
+          'line-width': 12,
+          'line-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            0.35,
+            0,
+          ],
+        },
+      });
       map.addLayer({
         id: SEGMENTS_LAYER_ID,
         source: SEGMENTS_SOURCE_ID,
         type: 'line',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#FC5200', 'line-width': 4, 'line-opacity': 0.85 },
+        paint: {
+          'line-color': colorByState,
+          'line-width': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            7,
+            4,
+          ],
+          'line-opacity': 0.95,
+        },
+      });
+      map.on('mouseenter', SEGMENTS_LAYER_ID, () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', SEGMENTS_LAYER_ID, () => {
+        map.getCanvas().style.cursor = '';
+      });
+      map.on('click', SEGMENTS_LAYER_ID, (e) => {
+        const f = e.features?.[0];
+        const fid = f?.id;
+        if (fid === undefined) return;
+        setSelectedId(Number(fid));
       });
       map.addSource(PINS_SOURCE_ID, {
         type: 'geojson',
@@ -92,7 +167,7 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
           features: items.map((s) => ({
             type: 'Feature',
             id: s.id,
-            properties: { id: s.id },
+            properties: { id: s.id, state: segmentState(s) },
             geometry: { type: 'Point', coordinates: [s.startLng, s.startLat] },
           })),
         },
@@ -102,8 +177,13 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
         source: PINS_SOURCE_ID,
         type: 'circle',
         paint: {
-          'circle-radius': 6,
-          'circle-color': '#FC5200',
+          'circle-radius': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            10,
+            6,
+          ],
+          'circle-color': colorByState,
           'circle-stroke-color': '#ffffff',
           'circle-stroke-width': 2,
         },
@@ -136,20 +216,67 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function focusSegment(s: FavoriteSegment) {
+  useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const coords = decodePolyline(s.polyline);
-    if (coords.length === 0) return;
-    const lats = coords.map((c) => c[0]);
-    const lngs = coords.map((c) => c[1]);
-    map.fitBounds(
-      [
-        [Math.min(...lngs), Math.min(...lats)],
-        [Math.max(...lngs), Math.max(...lats)],
-      ],
-      { padding: 60, maxZoom: 16, duration: 600 }
-    );
+    if (!map.getSource(SEGMENTS_SOURCE_ID)) return;
+    const visibleIds = items
+      .filter((s) => stillFavorite.has(s.id))
+      .map((s) => s.id);
+    for (const id of visibleIds) {
+      map.setFeatureState(
+        { source: SEGMENTS_SOURCE_ID, id },
+        { selected: id === selectedId }
+      );
+      map.setFeatureState(
+        { source: PINS_SOURCE_ID, id },
+        { selected: id === selectedId }
+      );
+    }
+    if (selectedId !== null) {
+      const target = itemsRef.current.find((i) => i.id === selectedId);
+      if (target) fitToSegment(map, target);
+      const row = document.getElementById(`fav-row-${selectedId}`);
+      row?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, items, stillFavorite]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const segSource = map.getSource(SEGMENTS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    const pinSource = map.getSource(PINS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    if (!segSource || !pinSource) return;
+    segSource.setData({
+      type: 'FeatureCollection',
+      features: items
+        .filter((s) => stillFavorite.has(s.id))
+        .map((s) => ({
+          type: 'Feature',
+          id: s.id,
+          properties: { id: s.id, state: segmentState(s) },
+          geometry: {
+            type: 'LineString',
+            coordinates: decodePolyline(s.polyline).map(([lat, lng]) => [lng, lat]),
+          },
+        })),
+    });
+    pinSource.setData({
+      type: 'FeatureCollection',
+      features: items
+        .filter((s) => stillFavorite.has(s.id))
+        .map((s) => ({
+          type: 'Feature',
+          id: s.id,
+          properties: { id: s.id, state: segmentState(s) },
+          geometry: { type: 'Point', coordinates: [s.startLng, s.startLat] },
+        })),
+    });
+  }, [items, stillFavorite]);
+
+  function focusSegment(s: FavoriteSegment) {
+    setSelectedId(s.id);
   }
 
   async function refreshAll() {
@@ -229,7 +356,9 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
     });
 
   return (
-    <div className="flex flex-col md:flex-row" style={{ height: '100vh' }}>
+    <div className="flex flex-col" style={{ height: '100vh' }}>
+      <AppNav />
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <div className="relative md:flex-1" style={{ minHeight: '50vh' }}>
         <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
       </div>
@@ -280,11 +409,15 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
               const remainingDistanceM = remainingAttempts !== null
                 ? remainingAttempts * s.distanceM
                 : null;
-              const rowClass = isYouTheLegend
+              const isSelected = s.id === selectedId;
+              const baseClass = isYouTheLegend
                 ? 'relative flex items-start gap-3 border-b border-[#FC5200]/40 bg-gradient-to-r from-[#FC5200]/15 via-[#FC5200]/[0.07] to-transparent px-4 py-3 hover:from-[#FC5200]/20'
                 : 'flex items-start gap-3 border-b border-neutral-100 px-4 py-3 hover:bg-neutral-50';
+              const rowClass = isSelected
+                ? `${baseClass} ring-2 ring-inset ring-[#FC5200]`
+                : baseClass;
               return (
-                <li key={s.id} className={rowClass}>
+                <li key={s.id} id={`fav-row-${s.id}`} className={rowClass}>
                   {isYouTheLegend && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -355,6 +488,7 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
           </ul>
         )}
       </aside>
+      </div>
     </div>
   );
 }

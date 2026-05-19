@@ -5,6 +5,7 @@ import maplibregl, { Map as MlMap, LngLatBoundsLike } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { ExploreSegment } from '@/app/api/segments/explore/route';
 import { decodePolyline } from '@/lib/strava/polyline';
+import { AppNav } from '@/components/AppNav';
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 const DEFAULT_CENTER: [number, number] = [4.9041, 52.3676];
@@ -132,7 +133,14 @@ export function ExploreMap({ initialFavoriteIds }: { initialFavoriteIds: number[
       setError(`Discover failed${text ? `: ${text}` : ''}`);
       return;
     }
-    await refetchFromCache();
+    const data = (await res!.json()) as { segments: ExploreSegment[] };
+    setSegments((prev) => {
+      const byId = new Map<number, ExploreSegment>(prev.map((s) => [s.id, s]));
+      for (const s of data.segments) byId.set(s.id, s);
+      const merged = Array.from(byId.values());
+      drawSegments(merged);
+      return merged;
+    });
   }
 
   function drawSegments(items: ExploreSegment[]) {
@@ -200,7 +208,9 @@ export function ExploreMap({ initialFavoriteIds }: { initialFavoriteIds: number[
   }, [hoverId, segments]);
 
   return (
-    <div className="flex flex-col md:flex-row" style={{ height: '100vh' }}>
+    <div className="flex flex-col" style={{ height: '100vh' }}>
+      <AppNav />
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
       <div className="relative md:flex-1" style={{ minHeight: '60vh' }}>
         <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
         <button
@@ -255,6 +265,7 @@ export function ExploreMap({ initialFavoriteIds }: { initialFavoriteIds: number[
           })}
         </ul>
       </aside>
+      </div>
     </div>
   );
 }
