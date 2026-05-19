@@ -10,8 +10,12 @@ const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 const SEGMENTS_SOURCE_ID = 'fav-segments';
 const SEGMENTS_LAYER_ID = 'fav-segments-line';
 const SEGMENTS_HALO_LAYER_ID = 'fav-segments-halo';
+const SEGMENTS_HELD_GLOW_LAYER_ID = 'fav-segments-held-glow';
+const SEGMENTS_HELD_LAYER_ID = 'fav-segments-held';
 const PINS_SOURCE_ID = 'fav-pins';
 const PINS_LAYER_ID = 'fav-pins-circle';
+const PINS_HELD_GLOW_LAYER_ID = 'fav-pins-held-glow';
+const PINS_HELD_LAYER_ID = 'fav-pins-held';
 
 const COLOR_HELD = '#F2C94C';
 const COLOR_CHASE = '#FC5200';
@@ -21,6 +25,45 @@ function segmentState(s: { isYouTheLegend: boolean; leaderCountOverall: number |
   if (s.isYouTheLegend) return 'held';
   if (s.leaderCountOverall !== null) return 'chase';
   return 'none';
+}
+
+const DEEP: [number, number, number] = [255, 228, 138]; // #FFE48A warm yellow
+const MID: [number, number, number] = [255, 240, 180]; // #FFF0B4
+const BRIGHT: [number, number, number] = [255, 252, 220]; // #FFFCDC near-white
+
+function lerp(a: [number, number, number], b: [number, number, number], t: number): string {
+  const r = Math.round(a[0] + (b[0] - a[0]) * t);
+  const g = Math.round(a[1] + (b[1] - a[1]) * t);
+  const bb = Math.round(a[2] + (b[2] - a[2]) * t);
+  return `rgb(${r},${g},${bb})`;
+}
+
+function brightnessToColor(b: number): string {
+  const c = Math.max(0, Math.min(1, b));
+  if (c < 0.5) return lerp(DEEP, MID, c / 0.5);
+  return lerp(MID, BRIGHT, (c - 0.5) / 0.5);
+}
+
+const SHIMMER_SAMPLES = 28;
+const SHIMMER_SHARPNESS = 80;
+
+function buildShimmerGradient(phase: number): maplibregl.ExpressionSpecification {
+  const cycle = phase % 1;
+  const peak = cycle;
+  const intensity = Math.sin(cycle * Math.PI);
+  const stops: (number | string)[] = [];
+  for (let i = 0; i <= SHIMMER_SAMPLES; i++) {
+    const x = i / SHIMMER_SAMPLES;
+    const d = Math.abs(x - peak);
+    const brightness = intensity * Math.exp(-d * d * SHIMMER_SHARPNESS);
+    stops.push(x, brightnessToColor(brightness));
+  }
+  return [
+    'interpolate',
+    ['linear'],
+    ['line-progress'],
+    ...stops,
+  ] as maplibregl.ExpressionSpecification;
 }
 
 function fitToSegment(map: MlMap, s: { polyline: string }) {
@@ -60,12 +103,17 @@ function formatKm(meters: number): string {
 export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[] }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
+  const shimmerRafRef = useRef<number | null>(null);
+  const heldLayersRef = useRef<Set<number>>(new Set());
+  const heldPhaseRef = useRef<Map<number, number>>(new Map());
   const [items, setItems] = useState<FavoriteSegment[]>(initialItems);
   const itemsRef = useRef<FavoriteSegment[]>(initialItems);
   itemsRef.current = items;
   const [stillFavorite, setStillFavorite] = useState<Set<number>>(
     () => new Set(initialItems.map((i) => i.id))
   );
+  const stillFavoriteRef = useRef<Set<number>>(stillFavorite);
+  stillFavoriteRef.current = stillFavorite;
   const [refreshingIds, setRefreshingIds] = useState<Set<number>>(() => new Set());
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -94,6 +142,7 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
     map.on('load', () => {
       map.addSource(SEGMENTS_SOURCE_ID, {
         type: 'geojson',
+        lineMetrics: true,
         data: {
           type: 'FeatureCollection',
           features: items.map((s) => ({
@@ -160,6 +209,21 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
         if (fid === undefined) return;
         setSelectedId(Number(fid));
       });
+
+      map.addLayer({
+        id: SEGMENTS_HELD_GLOW_LAYER_ID,
+        source: SEGMENTS_SOURCE_ID,
+        type: 'line',
+        filter: ['==', ['get', 'state'], 'held'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#E8C766',
+          'line-width': 18,
+          'line-blur': 8,
+          'line-opacity': 0.45,
+        },
+      });
+      syncHeldLayers();
       map.addSource(PINS_SOURCE_ID, {
         type: 'geojson',
         data: {
@@ -188,6 +252,35 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
           'circle-stroke-width': 2,
         },
       });
+      map.addLayer({
+        id: PINS_HELD_GLOW_LAYER_ID,
+        source: PINS_SOURCE_ID,
+        type: 'circle',
+        filter: ['==', ['get', 'state'], 'held'],
+        paint: {
+          'circle-radius': 20,
+          'circle-color': '#FFD24A',
+          'circle-blur': 1,
+          'circle-opacity': 0.6,
+        },
+      });
+      map.addLayer({
+        id: PINS_HELD_LAYER_ID,
+        source: PINS_SOURCE_ID,
+        type: 'circle',
+        filter: ['==', ['get', 'state'], 'held'],
+        paint: {
+          'circle-radius': [
+            'case',
+            ['boolean', ['feature-state', 'selected'], false],
+            12,
+            8,
+          ],
+          'circle-color': '#FFE48A',
+          'circle-stroke-color': '#B8860B',
+          'circle-stroke-width': 2,
+        },
+      });
 
       if (hasItems) {
         const coords = items.flatMap((s) =>
@@ -203,12 +296,27 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
           { padding: 40, maxZoom: 14, duration: 0 }
         );
       }
+
+      const PERIOD_MS = 3500;
+      function shimmer(now: number) {
+        const base = now / PERIOD_MS;
+        for (const id of heldLayersRef.current) {
+          const layerId = `fav-seg-held-${id}`;
+          if (!map.getLayer(layerId)) continue;
+          const offset = heldPhaseRef.current.get(id) ?? 0;
+          const phase = (base + offset) % 1;
+          map.setPaintProperty(layerId, 'line-gradient', buildShimmerGradient(phase));
+        }
+        shimmerRafRef.current = requestAnimationFrame(shimmer);
+      }
+      shimmerRafRef.current = requestAnimationFrame(shimmer);
     });
 
     const resizeObserver = new ResizeObserver(() => map.resize());
     resizeObserver.observe(container);
 
     return () => {
+      if (shimmerRafRef.current !== null) cancelAnimationFrame(shimmerRafRef.current);
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
@@ -241,6 +349,11 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, items, stillFavorite]);
+
+  useEffect(() => {
+    syncHeldLayers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, stillFavorite]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -334,6 +447,67 @@ export function FavoritesView({ items: initialItems }: { items: FavoriteSegment[
     const isOk = !!res && res.ok;
     if (!isOk) {
       setStillFavorite(prev);
+    }
+  }
+
+  function syncHeldLayers() {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!map.getSource(SEGMENTS_SOURCE_ID)) return;
+    const target = new Set(
+      itemsRef.current
+        .filter((i) => i.isYouTheLegend && stillFavoriteRef.current.has(i.id))
+        .map((i) => i.id)
+    );
+    for (const id of Array.from(heldLayersRef.current)) {
+      if (!target.has(id)) {
+        const lid = `fav-seg-held-${id}`;
+        if (map.getLayer(lid)) map.removeLayer(lid);
+        heldLayersRef.current.delete(id);
+        heldPhaseRef.current.delete(id);
+      }
+    }
+    for (const id of target) {
+      if (heldLayersRef.current.has(id)) continue;
+      const lid = `fav-seg-held-${id}`;
+      const beforeId = map.getLayer(PINS_HELD_GLOW_LAYER_ID)
+        ? PINS_HELD_GLOW_LAYER_ID
+        : map.getLayer(PINS_LAYER_ID)
+        ? PINS_LAYER_ID
+        : undefined;
+      map.addLayer(
+        {
+          id: lid,
+          source: SEGMENTS_SOURCE_ID,
+          type: 'line',
+          filter: ['==', ['get', 'id'], id],
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-width': [
+              'case',
+              ['boolean', ['feature-state', 'selected'], false],
+              10,
+              7,
+            ],
+            'line-gradient': buildShimmerGradient(Math.random()),
+          },
+        },
+        beforeId
+      );
+      map.on('mouseenter', lid, () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', lid, () => {
+        map.getCanvas().style.cursor = '';
+      });
+      map.on('click', lid, (e) => {
+        const f = e.features?.[0];
+        const fid = f?.id;
+        if (fid === undefined) return;
+        setSelectedId(Number(fid));
+      });
+      heldLayersRef.current.add(id);
+      heldPhaseRef.current.set(id, Math.random());
     }
   }
 
