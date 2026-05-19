@@ -1,4 +1,4 @@
-import { getSession } from '@/lib/auth/session';
+import { getCurrentUser } from '@/lib/auth/session';
 
 type SearchParams = Promise<{ auth?: string }>;
 
@@ -9,7 +9,7 @@ const AUTH_MESSAGES: Record<string, string> = {
 };
 
 export default async function Home({ searchParams }: { searchParams: SearchParams }) {
-  const session = await getSession();
+  const user = await getCurrentUser();
   const params = await searchParams;
   const authMessage = params.auth ? AUTH_MESSAGES[params.auth] : null;
 
@@ -30,22 +30,22 @@ export default async function Home({ searchParams }: { searchParams: SearchParam
           </div>
         )}
 
-        {session ? (
+        {user ? (
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3">
-              {session.avatarUrl && (
+              {user.avatarUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={session.avatarUrl}
+                  src={user.avatarUrl}
                   alt=""
                   className="h-10 w-10 rounded-full"
                 />
               )}
               <div className="text-left">
                 <div className="font-medium">
-                  {session.firstname} {session.lastname}
+                  {user.firstname} {user.lastname}
                 </div>
-                <div className="text-xs text-neutral-500">Athlete #{session.athleteId}</div>
+                <div className="text-xs text-neutral-500">Athlete #{user.stravaAthleteId}</div>
               </div>
             </div>
             <form action="/api/auth/logout" method="post">

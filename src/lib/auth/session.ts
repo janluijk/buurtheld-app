@@ -1,17 +1,14 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
+import { eq } from 'drizzle-orm';
+import { db } from '@/lib/db/client';
+import { users, type User } from '@/lib/db/schema';
 
 const SESSION_COOKIE = 'buurtheld_session';
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 30;
 
 export type Session = {
-  athleteId: number;
-  firstname: string;
-  lastname: string;
-  avatarUrl?: string;
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
+  userId: number;
 };
 
 function getSecret(): Uint8Array {
@@ -37,7 +34,12 @@ export async function verifySessionToken(token: string): Promise<Session | null>
   if (!isValid) {
     return null;
   }
-  return result.payload as unknown as Session;
+  const payload = result.payload as { userId?: unknown };
+  const hasUserId = typeof payload.userId === 'number';
+  if (!hasUserId) {
+    return null;
+  }
+  return { userId: payload.userId as number };
 }
 
 export async function setSessionCookie(session: Session): Promise<void> {
@@ -65,6 +67,16 @@ export async function getSession(): Promise<Session | null> {
     return null;
   }
   return verifySessionToken(token);
+}
+
+export async function getCurrentUser(): Promise<User | null> {
+  const session = await getSession();
+  const hasSession = !!session;
+  if (!hasSession) {
+    return null;
+  }
+  const rows = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
+  return rows[0] ?? null;
 }
 
 export { SESSION_COOKIE };

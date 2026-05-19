@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForToken } from '@/lib/strava/oauth';
 import { createSessionToken, SESSION_COOKIE } from '@/lib/auth/session';
+import { db } from '@/lib/db/client';
+import { users } from '@/lib/db/schema';
+import { sql } from 'drizzle-orm';
 
 const STATE_COOKIE = 'buurtheld_oauth_state';
 
@@ -35,15 +38,35 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(home);
   }
 
-  const sessionToken = await createSessionToken({
-    athleteId: token.athlete.id,
-    firstname: token.athlete.firstname,
-    lastname: token.athlete.lastname,
-    avatarUrl: token.athlete.profile_medium || token.athlete.profile,
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token,
-    expiresAt: token.expires_at,
-  });
+  const avatarUrl = token.athlete.profile_medium || token.athlete.profile || null;
+  const tokenExpiresAt = new Date(token.expires_at * 1000);
+
+  const [row] = await db
+    .insert(users)
+    .values({
+      stravaAthleteId: token.athlete.id,
+      firstname: token.athlete.firstname,
+      lastname: token.athlete.lastname,
+      avatarUrl,
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      tokenExpiresAt,
+    })
+    .onConflictDoUpdate({
+      target: users.stravaAthleteId,
+      set: {
+        firstname: token.athlete.firstname,
+        lastname: token.athlete.lastname,
+        avatarUrl,
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+        tokenExpiresAt,
+        lastLoginAt: sql`now()`,
+      },
+    })
+    .returning({ id: users.id });
+
+  const sessionToken = await createSessionToken({ userId: row.id });
 
   const res = NextResponse.redirect(home);
   res.cookies.delete(STATE_COOKIE);
